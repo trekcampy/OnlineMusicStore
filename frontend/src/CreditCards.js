@@ -8,33 +8,65 @@ class CreditCardForm extends React.Component{
         super(props);
 
         this.state = {
-            status : INITIALSTATE
+            status : INITIALSTATE,
+            value : '',
         };
+
+        this.handleChange = this.handleChange.bind(this);
+        this.handleSubmit = this.handleSubmit.bind(this);
+    }
+    
+    handleChange(event) {
+        event.preventDefault();
+        const name = event.target.name;
+        const value = event.target.value;
+        console.log("handleChange :" + event.target.name)
+        this.setState({
+            [name]: value
+        });
     }
 
-    async handleSubmit(event){
+    async handleSubmit(event) {
         event.preventDefault();
-        console.log("Handle submit called, with name: " + this.state.value);
-        //retrieve the token via Stripe's API
-        let { token } = await this.props.stripe.createToken({ name: this.state.value });
-        if (token == null) {
-            console.log("invalid token");
-            this.setState({ status: FAILEDSTATE });
-            return;
-        }
+        let id = "";
 
-        let response = await fetch("/charge", {
+        if (this.props.stripe) {
+            console.log('Strip is loaded');
+        } else {
+            console.log('Form submitted before Stripe loaded.');
+        }
+       //If we are not using a pre-saved card, connect with stripe to obtain a card token
+        if (!this.state.useExisting) {
+           //Create the token via Stripe's API
+           console.log(this.state.name);
+            let { token } = await this.props.stripe.createToken({ name: this.state.name});
+            if (token == null) {
+                console.log("invalid token");
+                this.setState({ status: FAILEDSTATE });
+                return;
+            }
+            id = token.id;
+            console.log("Stripe Token ID" + id);
+        }
+        //Create the request, then send it to the back-end
+        let response = await fetch("/users/charge", {
             method: "POST",
-            headers: { "Content-Type": "text/plain" },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                token: token.id,
-                operation: this.props.operation,
+                token: id,
+                customer_id: this.props.user,
+                product_id: this.props.productid,
+                sell_price: this.props.price,
+                rememberCard: this.state.remember !== undefined,
+                useExisting: this.state.useExisting
             })
         });
-        console.log(response.ok);
+        //If response is ok, consider the operation a success
         if (response.ok) {
             console.log("Purchase Complete!");
             this.setState({ status: SUCCESSSTATE });
+        } else {
+            this.setState({ status: FAILEDSTATE });
         }
     }
 
@@ -54,7 +86,7 @@ class CreditCardForm extends React.Component{
         </div>
 
         const remembercardcheck = <div className="form-row form-check text-center">
-            <input className="form-check-input" type="checkbox" value="" id="remembercardcheck" />
+            <input className="form-check-input" type="checkbox" value="" id="remembercardcheck" onChange={this.handleChange} />
             <label className="form-check-label" htmlFor="remembercardcheck">
                 Remember Card?
             </label>
@@ -67,7 +99,7 @@ class CreditCardForm extends React.Component{
                     <div className="form-row">
                         <div className="col-lg-12 form-group">
                             <label htmlFor="cc-name">Name On Card:</label>
-                            <input id="cc-name" name='cc-name' className="form-control" placeholder='Name on Card' onChange={this.handleInputChange} type='text' />
+                            <input id="cc-name" name='name' className="form-control" placeholder='Name on Card' onChange={this.handleChange} type='text' />
                         </div>
                     </div>
                     <div className="form-row">
@@ -122,19 +154,20 @@ class CreditCardForm extends React.Component{
     }
 }
 
-export default function CreditCardInformation(props){
+export default function CreditCardInformation(props) {
     if (!props.show) {
-        return <div/>;
+        return null;
     }
-   //inject our CreditCardForm component with stripe code in order to be able to make use of the createToken() method
+
+    console.log("Inside CreditCardInformation")
+
     const CCFormWithStripe = injectStripe(CreditCardForm);
     return (
         <div>
-            {/*stripe provider*/}
-            <StripeProvider apiKey="pk_test_LwL4RUtinpP3PXzYirX2jNfR">
+            {props.separator ? <hr /> : null}
+            <StripeProvider apiKey="pk_test_TYooMQauvdEDq54NiTphI7jx">
                 <Elements>
-                    {/*embed our credit card form*/}
-                    <CCFormWithStripe operation={props.operation} />
+                    <CCFormWithStripe user={props.user} operation={props.operation} productid={props.productid} price={props.price} toggle={props.toggle} />
                 </Elements>
             </StripeProvider>
         </div>
