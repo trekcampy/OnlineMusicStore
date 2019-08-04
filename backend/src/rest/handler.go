@@ -2,11 +2,15 @@ package rest
 
 import (
 	"dblayer"
+	"log"
 	"models"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stripe/stripe-go"
+	"github.com/stripe/stripe-go/charge"
+	"github.com/stripe/stripe-go/customer"
 )
 
 type HandlerInterface interface {
@@ -152,7 +156,82 @@ func (h *Handler) GetOrders(c *gin.Context) {
 }
 
 func (h *Handler) Charge(c *gin.Context) {
+
 	if h.db == nil {
 		return
+	}
+
+	request := struct {
+		models.Order
+		Remember    bool   `json:"rememberCard"`
+		UseExisting bool   `json:"useExisting"`
+		Token       string `json:"token"`
+	}{}
+
+	err := c.ShouldBindJSON(&request)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, &request)
+		return
+	}
+
+	stripe.Key = "sk_test_4eC39HqLyjWDarjtT1zdp7dc"
+
+	chargeP := &stripe.ChargeParams{
+		//the price we obtained from the incoming request:
+		Amount: stripe.Int64(int64(request.Price)),
+		//the currency:
+		Currency: stripe.String("usd"),
+		//the description:
+		Description: stripe.String("GoMusic charge..."),
+	}
+
+	stripeCustomerID := ""
+
+	if request.UseExisting {
+		//use existing
+		log.Println("Getting credit card id...")
+		//This is a new method which retrieve the stripe customer id from the database
+		stripeCustomerID, err = h.db.GetCreditCardCID(request.CustomerID)
+		if err != nil {
+			log.Println(err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		cp := &stripe.CustomerParams{}
+		cp.SetSource(request.Token)
+		customer, err := customer.New(cp)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		stripeCustomerID = customer.ID
+	}
+
+	if request.Remember {
+		//save the stripe customer id, and link it to the actual customer id in our database
+		err = h.db.SaveCreditCardForCustomer(request.CustomerID, stripeCustomerID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	/*
+		we should check if the customer already ordered the same item or not but for simplicity, let's assume it's a new order
+	*/
+
+	//Assign the stipe customer id to the *stripe.ChargeParams object:
+	chargeP.Customer = stripe.String(stripeCustomerID)
+	//Charge the credit card
+	_, err = charge.New(chargeP)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	err = h.db.AddOrder(request.Order)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}
 }
